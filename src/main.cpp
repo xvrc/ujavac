@@ -1,7 +1,9 @@
 #include <cstdio>
 #include <cstring>
 #include <format>
+#include <string_view>
 #include <utility>
+#include <vector>
 
 #ifdef _WIN32
 #include <io.h>
@@ -9,17 +11,10 @@
 #include <unistd.h>
 #endif
 
+#include "ujavac.h"
+
 namespace
 {
-using s8 = signed char;
-using u8 = unsigned char;
-using s16 = signed short;
-using u16 = unsigned short;
-using s32 = signed int;
-using u32 = unsigned int;
-using s64 = signed long long;
-using u64 = unsigned long long;
-
 bool is_file_terminal(std::FILE *f)
 {
 #ifdef _WIN32
@@ -27,30 +22,6 @@ bool is_file_terminal(std::FILE *f)
 #else
     return isatty(fileno(f));
 #endif
-}
-
-template <class... Args> u32 print(std::FILE *f, std::format_string<Args...> fmt, Args &&...args)
-{
-    int ret =
-        std::fprintf(f, "%s", std::vformat(fmt.get(), std::make_format_args(std::forward<Args>(args)...)).c_str());
-    return ret < 0 ? 0 : ret;
-}
-
-template <class... Args> u32 print(std::format_string<Args...> fmt, Args &&...args)
-{
-    return print(stdout, fmt, std::forward<Args>(args)...);
-}
-
-template <class... Args> u32 println(std::FILE *f, std::format_string<Args...> fmt, Args &&...args)
-{
-    int ret =
-        std::fprintf(f, "%s\n", std::vformat(fmt.get(), std::make_format_args(std::forward<Args>(args)...)).c_str());
-    return ret < 0 ? 0 : ret;
-}
-
-template <class... Args> u32 println(std::format_string<Args...> fmt, Args &&...args)
-{
-    return println(stdout, fmt, std::forward<Args>(args)...);
 }
 
 enum class prog_opt
@@ -82,13 +53,7 @@ constexpr prog_opt_desc prog_opt_descs[] = {
     {prog_opt::version, {"--version", "-version"}, "Version information"},
     {prog_opt::werror, {"-Werror"}, "Terminate compilation if warnings occur"}};
 
-u8 compile()
-{
-    // TODO implement
-    return 0;
-}
-
-void print_usage(std::FILE* f)
+void print_usage(std::FILE *f)
 {
     println(f, "Usage: ujavac <options> <source files>");
 }
@@ -171,6 +136,7 @@ int main(int argc, char **argv)
         return 2;
     }
 
+    std::vector<std::string_view> inputs;
     for (u32 i = 1; i < argc; i++)
     {
         auto arg = argv[i];
@@ -203,8 +169,11 @@ int main(int argc, char **argv)
             }
         }
 
+        inputs.push_back(arg);
+
     outer:;
     }
 
-    return compile();
+    Context ctx{inputs};
+    return ctx.compile();
 }
