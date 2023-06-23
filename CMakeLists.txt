@@ -17,7 +17,7 @@ endif()
 
 add_executable(ujavac
     src/ujavac.h
-    src/code.cpp
+    src/compiler.cpp
     src/main.cpp
 )
 

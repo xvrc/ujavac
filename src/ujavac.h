@@ -41,15 +41,45 @@ template <class... Args> u32 println(std::format_string<Args...> fmt, Args &&...
 
 class Context
 {
-  private:
-    const std::span<std::string_view> m_inputs;
-
   public:
     explicit Context(std::span<std::string_view> inputs) : m_inputs(inputs)
     {
     }
 
     u8 compile();
+
+  private:
+    bool compile_input(const std::string_view &item);
+
+    const std::span<std::string_view> m_inputs;
+};
+
+enum class InputUnitErr
+{
+    Ok,
+    EndOfFile,
+    BadRead,
+    BadOpen,
+};
+
+class InputUnit
+{
+  public:
+    explicit InputUnit(std::string_view path) : m_path(), m_file(nullptr)
+    {
+    }
+
+    ~InputUnit();
+
+    InputUnit(const InputUnit &other) = delete;
+    InputUnit &operator=(const InputUnit &other) = delete;
+
+    InputUnitErr open();
+    InputUnitErr read(u8 &c);
+
+  private:
+    std::string_view m_path;
+    std::FILE *m_file;
 };
 
 #endif
