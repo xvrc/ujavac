@@ -48,6 +48,7 @@ class Context
     explicit Context(std::span<std::string_view> inputs) : m_inputs(inputs)
     {
     }
+
     u8 compile();
 };
 

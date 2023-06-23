@@ -1,3 +1,5 @@
+#include "ujavac.h"
+
 #include <cstdio>
 #include <cstring>
 #include <format>
@@ -10,8 +12,6 @@
 #else
 #include <unistd.h>
 #endif
-
-#include "ujavac.h"
 
 namespace
 {
