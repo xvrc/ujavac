@@ -4,7 +4,6 @@
 #include <cstdio>
 #include <format>
 #include <span>
-#include <string_view>
 
 using s8 = signed char;
 using u8 = unsigned char;
@@ -39,47 +38,22 @@ template <class... Args> u32 println(std::format_string<Args...> fmt, Args &&...
     return println(stdout, fmt, std::forward<Args>(args)...);
 }
 
+bool is_java_iden_start(u32 c);
+bool is_java_iden_part(u32 c);
+
 class Context
 {
   public:
-    explicit Context(std::span<std::string_view> inputs) : m_inputs(inputs)
+    explicit Context(std::span<const char *> inputs) : m_inputs(inputs)
     {
     }
 
     u8 compile();
 
   private:
-    bool compile_input(const std::string_view &item);
+    bool compile_input(const char *path);
 
-    const std::span<std::string_view> m_inputs;
-};
-
-enum class InputUnitErr
-{
-    Ok,
-    EndOfFile,
-    BadRead,
-    BadOpen,
-};
-
-class InputUnit
-{
-  public:
-    explicit InputUnit(std::string_view path) : m_path(), m_file(nullptr)
-    {
-    }
-
-    ~InputUnit();
-
-    InputUnit(const InputUnit &other) = delete;
-    InputUnit &operator=(const InputUnit &other) = delete;
-
-    InputUnitErr open();
-    InputUnitErr read(u8 &c);
-
-  private:
-    std::string_view m_path;
-    std::FILE *m_file;
+    const std::span<const char *> m_inputs;
 };
 
 #endif

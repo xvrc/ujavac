@@ -3,7 +3,6 @@
 #include <cstdio>
 #include <cstring>
 #include <format>
-#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -136,7 +135,7 @@ int main(int argc, char **argv)
         return 2;
     }
 
-    std::vector<std::string_view> inputs;
+    std::vector<const char *> inputs;
     for (u32 i = 1; i < argc; i++)
     {
         auto arg = argv[i];
