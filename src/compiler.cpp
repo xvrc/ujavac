@@ -24,19 +24,13 @@ constexpr bool is_java_iden_part(u32 c)
     return is_java_iden_start(c) || is_dec_digit(c);
 }
 
-// JLS 3.4
-constexpr bool is_java_single_line_terminator(u32 c)
-{
-    return c == '\n' || c == '\r';
-}
-
 // JLS 3.6
 constexpr bool is_java_whitespace(u32 c)
 {
-    return c == ' ' || c == '\t' || c == '\f' || is_java_single_line_terminator(c);
+    return c == ' ' || c == '\t' || c == '\f' || c == '\r' || c == '\n';
 }
 
-constexpr bool is_hex_digit(u32 c)
+constexpr bool is_java_hex_digit(u32 c)
 {
     return c >= 'A' && c <= 'F' || c >= 'a' && c <= 'f' || is_dec_digit(c);
 }
@@ -61,9 +55,9 @@ bool Compiler::compile_input(u32 i) const
     std::FILE *src_file = std::fopen(m_inputs[i], "rb");
     std::FILE *dst_file = std::fopen(m_outputs[i].c_str(), "wb");
 
-    // A single UTF-8 encoding character from the input
-    // stream. All input starts from this representation.
-    u8 raw_utf8 = 0;
+    // State that tracks the special end-of-file condition outlined in JLS 3.5
+    int src_file_ch = 0;
+    bool prev_sub = false;
 
     // Reconstructed Unicode code point from UTF-8 input.
     u32 raw_unicode = 0;
@@ -85,8 +79,11 @@ bool Compiler::compile_input(u32 i) const
     char token_buf[sizeof("synchronized")] = {};
     u32 token_buf_len = 0;
 
+    // Source code line segmentation state.
     u64 line_num = 1;
     u64 col_num = 1;
+    bool prev_cr = false;
+
     u64 raw_backslash_count = 0;
 
     if (!src_file || !dst_file)
@@ -94,12 +91,15 @@ bool Compiler::compile_input(u32 i) const
         goto cleanup;
     }
 
-    while (std::fread(&raw_utf8, 1, 1, src_file) == 1)
+    while (src_file_ch != EOF)
     {
-        // The input character after reconstruction
-        // and Unicode escape sequence processing.
-        // Lexing happens from this representation.
-        u32 unicode = 0;
+        src_file_ch = std::fgetc(src_file);
+
+        // A single UTF-8 encoding character from the input
+        // stream. All input starts from this representation.
+        // Use of the SUB character as a placeholder for EOF is
+        // inspired by JLS 3.5
+        u8 raw_utf8 = src_file_ch == EOF ? '\x1A' : src_file_ch;
 
         if (!raw_unicode_remaining)
         {
@@ -117,16 +117,37 @@ bool Compiler::compile_input(u32 i) const
             continue;
         }
 
-        // FIXME does not handle \r\n as a single line
-        if (is_java_single_line_terminator(raw_unicode))
+        if (raw_unicode == '\x1A')
+        {
+            prev_sub = true;
+        }
+
+        // JLS 3.4
+        if (raw_unicode == '\n')
+        {
+            if (!prev_cr)
+            {
+                line_num++;
+                col_num = 1;
+            }
+
+            prev_cr = false;
+        }
+        else if (raw_unicode == '\r')
         {
             line_num++;
             col_num = 1;
+            prev_cr = true;
         }
         else
         {
             col_num++;
         }
+
+        // The input character after reconstruction
+        // and Unicode escape sequence processing.
+        // Lexing happens from this representation.
+        u32 unicode = 0;
 
         if (esc_utf16_remaining)
         {
