@@ -173,6 +173,6 @@ int main(int argc, char **argv)
     outer:;
     }
 
-    Context ctx{inputs};
-    return ctx.compile();
+    Compiler compiler{inputs};
+    return compiler.compile();
 }

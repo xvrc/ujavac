@@ -1,69 +1,69 @@
 #include "ujavac.h"
 
 #include <atomic>
-#include <fstream>
-#include <functional>
+#include <cstdio>
 
-#include <tbb/parallel_for_each.h>
+#include <tbb/parallel_for.h>
 
-static bool is_dec_digit(u32 c)
+constexpr bool is_dec_digit(u32 c)
 {
     return c >= '0' && c <= '9';
 }
 
 // JLS 3.8, "Java letter" definition
 // TODO add Unicode support
-static bool is_java_iden_start(u32 c)
+constexpr bool is_java_iden_start(u32 c)
 {
     return c >= 'A' && c <= 'Z' || c >= 'a' && c <= 'z' || c == '$' || c == '_';
 }
 
 // JLS 3.8, "Java letter-or-digit" definition
 // TODO add Unicode support
-static bool is_java_iden_part(u32 c)
+constexpr bool is_java_iden_part(u32 c)
 {
     return is_java_iden_start(c) || is_dec_digit(c);
 }
 
 // JLS 3.4
-static bool is_java_single_line_terminator(u32 c)
+constexpr bool is_java_single_line_terminator(u32 c)
 {
     return c == '\n' || c == '\r';
 }
 
 // JLS 3.6
-static bool is_java_whitespace(u32 c)
+constexpr bool is_java_whitespace(u32 c)
 {
     return c == ' ' || c == '\t' || c == '\f' || is_java_single_line_terminator(c);
 }
 
-static bool is_hex_digit(u32 c)
+constexpr bool is_hex_digit(u32 c)
 {
     return c >= 'A' && c <= 'F' || c >= 'a' && c <= 'f' || is_dec_digit(c);
 }
 
-static bool is_utf16_high_surrogate(u16 c)
+constexpr bool is_ascii(u32 c)
+{
+    return c < 128;
+}
+
+constexpr bool is_utf16_high_surrogate(u16 c)
 {
     return c >= 0xD800 && c <= 0xDBFF;
 }
 
-static bool is_utf16_low_surrogate(u16 c)
+constexpr bool is_utf16_low_surrogate(u16 c)
 {
     return c >= 0xDC00 && c <= 0xDFFF;
 }
 
-static bool is_utf16_surrogate(u16 c)
+bool Compiler::compile_input(u32 i) const
 {
-    return is_utf16_high_surrogate(c) || is_utf16_low_surrogate(c);
-}
-
-bool Context::compile_input(const char *path)
-{
-    std::basic_ifstream<char8_t> stream{path};
+    std::FILE *src_file = std::fopen(m_inputs[i], "rb");
+    std::FILE *dst_file = std::fopen(m_outputs[i].c_str(), "wb");
 
     // A single UTF-8 encoding character from the input
     // stream. All input starts from this representation.
-    char8_t raw_utf8 = 0;
+    u8 raw_utf8 = 0;
 
     // Reconstructed Unicode code point from UTF-8 input.
     u32 raw_unicode = 0;
@@ -89,7 +89,12 @@ bool Context::compile_input(const char *path)
     u64 col_num = 1;
     u64 raw_backslash_count = 0;
 
-    while (stream.read(&raw_utf8, 1))
+    if (!src_file || !dst_file)
+    {
+        goto cleanup;
+    }
+
+    while (std::fread(&raw_utf8, 1, 1, src_file) == 1)
     {
         // The input character after reconstruction
         // and Unicode escape sequence processing.
@@ -165,6 +170,7 @@ bool Context::compile_input(const char *path)
                 break;
             default:;
                 // TODO fatal
+                goto cleanup;
             }
 
             esc_utf16[esc_utf16_len] |= val << (4 * esc_utf16_remaining);
@@ -174,14 +180,13 @@ bool Context::compile_input(const char *path)
                 prev_esc = true;
                 esc_utf16_len++;
 
-                if (esc_utf16_len == 2)
+                if (esc_utf16_len == 1 && is_utf16_low_surrogate(esc_utf16[0]))
                 {
-                    // TODO convert esc_utf16 to unicode
+                    // TODO fatal
+                    goto cleanup;
                 }
-                else if (esc_utf16_len == 1)
-                {
-                    // TODO check if convertible esc_utf16 to unicode
-                }
+
+                // TODO convert esc_utf16 to unicode
             }
 
             if (esc_utf16_len != 2)
@@ -207,9 +212,10 @@ bool Context::compile_input(const char *path)
 
         prev_esc = false;
 
-        if (esc_utf16_len && is_utf16_surrogate(esc_utf16[0]))
+        if (esc_utf16_len && is_utf16_high_surrogate(esc_utf16[0]))
         {
             // TODO fatal
+            goto cleanup;
         }
 
         // print("{} ", unicode);
@@ -217,15 +223,28 @@ bool Context::compile_input(const char *path)
 
     // println("");
 
-    return stream.good();
+cleanup:
+    bool good = false;
+    if (src_file)
+    {
+        good = !std::ferror(src_file);
+        std::fclose(src_file);
+    }
+
+    if (dst_file)
+    {
+        std::fclose(dst_file);
+    }
+
+    return good;
 }
 
-u8 Context::compile()
+u8 Compiler::compile() const
 {
     std::atomic_bool status = true;
-    tbb::parallel_for_each(m_inputs.begin(), m_inputs.end(), [&, this](const char *&item) {
+    tbb::parallel_for(u32(0), u32(m_inputs.size()), [&, this](u32 i) {
         bool expected = true;
-        status.compare_exchange_strong(expected, compile_input(item));
+        status.compare_exchange_strong(expected, compile_input(i));
     });
 
     // Invert the status when returning to match traditional
