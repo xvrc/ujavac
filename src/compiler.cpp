@@ -42,9 +42,19 @@ static bool is_hex_digit(u32 c)
     return c >= 'A' && c <= 'F' || c >= 'a' && c <= 'f' || is_dec_digit(c);
 }
 
+static bool is_utf16_high_surrogate(u16 c)
+{
+    return c >= 0xD800 && c <= 0xDBFF;
+}
+
+static bool is_utf16_low_surrogate(u16 c)
+{
+    return c >= 0xDC00 && c <= 0xDFFF;
+}
+
 static bool is_utf16_surrogate(u16 c)
 {
-    return c >= 0xD800 && c <= 0xDBFF || c >= 0xDC00 && c <= 0xDFFF;
+    return is_utf16_high_surrogate(c) || is_utf16_low_surrogate(c);
 }
 
 bool Context::compile_input(const char *path)
@@ -61,6 +71,8 @@ bool Context::compile_input(const char *path)
     // State counter for Unicode code point reconstruction.
     u32 raw_unicode_remaining = 0;
 
+    // State variables responsible for keeping track of
+    // Unicode escape sequences (i.e. \uXXXX).
     u16 esc_utf16[2] = {};
     u32 esc_utf16_len = 0;
     u32 esc_utf16_remaining = 0;
@@ -69,11 +81,6 @@ bool Context::compile_input(const char *path)
     // Backslashes need special care during parsing because
     // they're used in escape sequences at various stages.
     bool prev_backslash = false;
-
-    // The input character after reconstruction
-    // and Unicode escape sequence processing.
-    // Lexing happens from this representation.
-    u32 unicode = 0;
 
     char token_buf[sizeof("synchronized")] = {};
     u32 token_buf_len = 0;
@@ -84,6 +91,11 @@ bool Context::compile_input(const char *path)
 
     while (stream.read(&raw_utf8, 1))
     {
+        // The input character after reconstruction
+        // and Unicode escape sequence processing.
+        // Lexing happens from this representation.
+        u32 unicode = 0;
+
         if (!raw_unicode_remaining)
         {
             for (raw_unicode_remaining = 1; raw_utf8 & (0x80 >> raw_unicode_remaining); ++raw_unicode_remaining)
@@ -113,6 +125,12 @@ bool Context::compile_input(const char *path)
 
         if (esc_utf16_remaining)
         {
+            // The start of a Unicode escape sequence can contain more than one "u"
+            if (esc_utf16_remaining == 4 && raw_unicode == 'u')
+            {
+                continue;
+            }
+
             --esc_utf16_remaining;
 
             u16 val;
