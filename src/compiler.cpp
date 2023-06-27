@@ -6,81 +6,45 @@
 
 #include <tbb/parallel_for_each.h>
 
-constexpr u32 UNICODE_UPPERCASE_A = 65;
-constexpr u32 UNICODE_UPPERCASE_B = 66;
-constexpr u32 UNICODE_UPPERCASE_C = 67;
-constexpr u32 UNICODE_UPPERCASE_D = 68;
-constexpr u32 UNICODE_UPPERCASE_E = 69;
-constexpr u32 UNICODE_UPPERCASE_F = 70;
-constexpr u32 UNICODE_UPPERCASE_Z = 90;
-
-constexpr u32 UNICODE_LOWERCASE_A = 97;
-constexpr u32 UNICODE_LOWERCASE_B = 98;
-constexpr u32 UNICODE_LOWERCASE_C = 99;
-constexpr u32 UNICODE_LOWERCASE_D = 100;
-constexpr u32 UNICODE_LOWERCASE_E = 101;
-constexpr u32 UNICODE_LOWERCASE_F = 102;
-constexpr u32 UNICODE_LOWERCASE_U = 117;
-constexpr u32 UNICODE_LOWERCASE_Z = 122;
-
-constexpr u32 UNICODE_DOLLAR_SIGN = 36;
-constexpr u32 UNICODE_UNDERSCORE = 95;
-
-constexpr u32 UNICODE_DIGIT_ZERO = 48;
-constexpr u32 UNICODE_DIGIT_ONE = 49;
-constexpr u32 UNICODE_DIGIT_TWO = 50;
-constexpr u32 UNICODE_DIGIT_THREE = 51;
-constexpr u32 UNICODE_DIGIT_FOUR = 52;
-constexpr u32 UNICODE_DIGIT_FIVE = 53;
-constexpr u32 UNICODE_DIGIT_SIX = 54;
-constexpr u32 UNICODE_DIGIT_SEVEN = 55;
-constexpr u32 UNICODE_DIGIT_EIGHT = 56;
-constexpr u32 UNICODE_DIGIT_NINE = 57;
-
-constexpr u32 UNICODE_LINE_FEED = 10;
-constexpr u32 UNICODE_CARRIAGE_RETURN = 13;
-constexpr u32 UNICODE_SPACE = 32;
-constexpr u32 UNICODE_HORIZONTAL_TAB = 9;
-constexpr u32 UNICODE_FORM_FEED = 12;
-constexpr u32 UNICODE_BACKSLASH = 92;
+static bool is_dec_digit(u32 c)
+{
+    return c >= '0' && c <= '9';
+}
 
 // JLS 3.8, "Java letter" definition
 // TODO add Unicode support
-bool is_java_iden_start(u32 c)
+static bool is_java_iden_start(u32 c)
 {
-    return c >= UNICODE_UPPERCASE_A && c <= UNICODE_UPPERCASE_Z ||
-           c >= UNICODE_LOWERCASE_A && c <= UNICODE_LOWERCASE_Z || c == UNICODE_DOLLAR_SIGN || c == UNICODE_UNDERSCORE;
+    return c >= 'A' && c <= 'Z' || c >= 'a' && c <= 'z' || c == '$' || c == '_';
 }
 
 // JLS 3.8, "Java letter-or-digit" definition
 // TODO add Unicode support
-bool is_java_iden_part(u32 c)
+static bool is_java_iden_part(u32 c)
 {
     return is_java_iden_start(c) || is_dec_digit(c);
 }
 
 // JLS 3.4
-bool is_java_single_line_terminator(u32 c)
+static bool is_java_single_line_terminator(u32 c)
 {
-    return c == UNICODE_LINE_FEED || c == UNICODE_CARRIAGE_RETURN;
+    return c == '\n' || c == '\r';
 }
 
 // JLS 3.6
-bool is_java_whitespace(u32 c)
+static bool is_java_whitespace(u32 c)
 {
-    return c == UNICODE_SPACE || c == UNICODE_HORIZONTAL_TAB || c == UNICODE_FORM_FEED ||
-           is_java_single_line_terminator(c);
+    return c == ' ' || c == '\t' || c == '\f' || is_java_single_line_terminator(c);
 }
 
-bool is_dec_digit(u32 c)
+static bool is_hex_digit(u32 c)
 {
-    return c >= UNICODE_DIGIT_ZERO && c <= UNICODE_DIGIT_NINE;
+    return c >= 'A' && c <= 'F' || c >= 'a' && c <= 'f' || is_dec_digit(c);
 }
 
-bool is_hex_digit(u32 c)
+static bool is_utf16_surrogate(u16 c)
 {
-    return c >= UNICODE_UPPERCASE_A && c <= UNICODE_UPPERCASE_F ||
-           c >= UNICODE_LOWERCASE_A && c <= UNICODE_LOWERCASE_F || is_dec_digit(c);
+    return c >= 0xD800 && c <= 0xDBFF || c >= 0xDC00 && c <= 0xDFFF;
 }
 
 bool Context::compile_input(const char *path)
@@ -89,7 +53,7 @@ bool Context::compile_input(const char *path)
 
     // A single UTF-8 encoding character from the input
     // stream. All input starts from this representation.
-    char8_t raw;
+    char8_t raw_utf8 = 0;
 
     // Reconstructed Unicode code point from UTF-8 input.
     u32 raw_unicode = 0;
@@ -97,30 +61,38 @@ bool Context::compile_input(const char *path)
     // State counter for Unicode code point reconstruction.
     u32 raw_unicode_remaining = 0;
 
-    u16 esc_utf16_a = 0;
-    u16 esc_utf16_b = 0;
+    u16 esc_utf16[2] = {};
+    u32 esc_utf16_len = 0;
     u32 esc_utf16_remaining = 0;
-    bool last_input_esc = false;
+    bool prev_esc = false;
 
-    u32 unicode;
+    // Backslashes need special care during parsing because
+    // they're used in escape sequences at various stages.
+    bool prev_backslash = false;
+
+    // The input character after reconstruction
+    // and Unicode escape sequence processing.
+    // Lexing happens from this representation.
+    u32 unicode = 0;
+
+    char token_buf[sizeof("synchronized")] = {};
+    u32 token_buf_len = 0;
 
     u64 line_num = 1;
     u64 col_num = 1;
-    u64 backslash_count = 0;
+    u64 raw_backslash_count = 0;
 
-    while (stream.read(&raw, 1))
+    while (stream.read(&raw_utf8, 1))
     {
-        // TODO update line_num and col_num
-
         if (!raw_unicode_remaining)
         {
-            for (raw_unicode_remaining = 1; raw & (0x80 >> raw_unicode_remaining); ++raw_unicode_remaining)
+            for (raw_unicode_remaining = 1; raw_utf8 & (0x80 >> raw_unicode_remaining); ++raw_unicode_remaining)
                 ;
-            raw_unicode = raw;
+            raw_unicode = raw_utf8;
         }
         else
         {
-            raw_unicode = (raw_unicode << 6) | (raw & 0x30);
+            raw_unicode = (raw_unicode << 6) | (raw_utf8 & 0x30);
         }
 
         if (--raw_unicode_remaining)
@@ -128,75 +100,104 @@ bool Context::compile_input(const char *path)
             continue;
         }
 
-        if (--esc_utf16_remaining)
+        // FIXME does not handle \r\n as a single line
+        if (is_java_single_line_terminator(raw_unicode))
         {
-            if (esc_utf16_remaining == 5)
+            line_num++;
+            col_num = 1;
+        }
+        else
+        {
+            col_num++;
+        }
+
+        if (esc_utf16_remaining)
+        {
+            --esc_utf16_remaining;
+
+            u16 val;
+            switch (raw_unicode)
             {
-                if (raw_unicode != UNICODE_LOWERCASE_U)
-                {
-                    // TODO fatal
-                }
-                unicode = 0;
-            }
-            else if (esc_utf16_remaining < 5)
-            {
-                u32 val;
-                switch (raw_unicode)
-                {
-                case UNICODE_LOWERCASE_A:
-                case UNICODE_LOWERCASE_B:
-                case UNICODE_LOWERCASE_C:
-                case UNICODE_LOWERCASE_D:
-                case UNICODE_LOWERCASE_E:
-                case UNICODE_LOWERCASE_F:
-                    raw_unicode -= UNICODE_LOWERCASE_A - UNICODE_UPPERCASE_A;
-                case UNICODE_UPPERCASE_A:
-                case UNICODE_UPPERCASE_B:
-                case UNICODE_UPPERCASE_C:
-                case UNICODE_UPPERCASE_D:
-                case UNICODE_UPPERCASE_E:
-                case UNICODE_UPPERCASE_F:
-                    val = raw_unicode - UNICODE_UPPERCASE_A;
-                    break;
-                case UNICODE_DIGIT_ZERO:
-                case UNICODE_DIGIT_ONE:
-                case UNICODE_DIGIT_TWO:
-                case UNICODE_DIGIT_THREE:
-                case UNICODE_DIGIT_FOUR:
-                case UNICODE_DIGIT_FIVE:
-                case UNICODE_DIGIT_SIX:
-                case UNICODE_DIGIT_SEVEN:
-                case UNICODE_DIGIT_EIGHT:
-                case UNICODE_DIGIT_NINE:
-                    val = raw_unicode - UNICODE_DIGIT_ZERO;
-                    break;
-                default:;
-                    // TODO fatal
-                }
-                unicode |= val;
+            case 'a':
+            case 'b':
+            case 'c':
+            case 'd':
+            case 'e':
+            case 'f':
+                raw_unicode -= 'a' - 'A';
+            case 'A':
+            case 'B':
+            case 'C':
+            case 'D':
+            case 'E':
+            case 'F':
+                val = raw_unicode - 'A';
+                break;
+            case '0':
+            case '1':
+            case '2':
+            case '3':
+            case '4':
+            case '5':
+            case '6':
+            case '7':
+            case '8':
+            case '9':
+                val = raw_unicode - '0';
+                break;
+            default:;
+                // TODO fatal
             }
 
+            esc_utf16[esc_utf16_len] |= val << (4 * esc_utf16_remaining);
+
+            if (!esc_utf16_remaining)
+            {
+                prev_esc = true;
+                esc_utf16_len++;
+
+                if (esc_utf16_len == 2)
+                {
+                    // TODO convert esc_utf16 to unicode
+                }
+                else if (esc_utf16_len == 1)
+                {
+                    // TODO check if convertible esc_utf16 to unicode
+                }
+            }
+
+            if (esc_utf16_len != 2)
+            {
+                continue;
+            }
+
+            esc_utf16_len = 0;
+        }
+        // JLS 3.3
+        else if (prev_backslash && raw_unicode == 'u' && (raw_backslash_count % 2 == 0 || prev_esc))
+        {
+            esc_utf16_remaining = 4;
+            prev_backslash = false;
+            continue;
+        }
+        else if (raw_unicode == '\\')
+        {
+            raw_backslash_count++;
+            prev_backslash = true;
             continue;
         }
 
-        if (raw_unicode == UNICODE_BACKSLASH)
-        {
-            backslash_count++;
+        prev_esc = false;
 
-            if (last_input_esc)
-            {
-                last_input_esc = false;
-                unicode = raw_unicode;
-                goto lex;
-            }
-            else
-            {
-                esc_utf16_remaining = 6;
-                continue;
-            }
+        if (esc_utf16_len && is_utf16_surrogate(esc_utf16[0]))
+        {
+            // TODO fatal
         }
-    lex:;
+
+        // print("{} ", unicode);
     }
+
+    // println("");
 
     return stream.good();
 }

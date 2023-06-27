@@ -38,13 +38,6 @@ template <class... Args> u32 println(std::format_string<Args...> fmt, Args &&...
     return println(stdout, fmt, std::forward<Args>(args)...);
 }
 
-bool is_java_iden_start(u32 c);
-bool is_java_iden_part(u32 c);
-bool is_java_single_line_terminator(u32 c);
-bool is_java_whitespace(u32 c);
-bool is_dec_digit(u32 c);
-bool is_hex_digit(u32 c);
-
 class Context
 {
   public:
