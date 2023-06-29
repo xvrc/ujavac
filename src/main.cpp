@@ -173,6 +173,6 @@ int main(int argc, char **argv)
     outer:;
     }
 
-    Compiler compiler{inputs};
-    return compiler.compile();
+    CompilerManager cm{inputs};
+    return cm.run();
 }

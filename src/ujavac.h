@@ -5,6 +5,7 @@
 #include <format>
 #include <span>
 #include <string>
+#include <string_view>
 #include <vector>
 
 using s8 = signed char;
@@ -40,29 +41,67 @@ template <class... Args> u32 println(std::format_string<Args...> fmt, Args &&...
     return println(stdout, fmt, std::forward<Args>(args)...);
 }
 
+enum class LexerItem
+{
+    None,
+    TraditionalComment,
+    EndOfLineComment,
+};
+
 class Compiler
 {
   public:
-    explicit Compiler(std::span<const char *> inputs) : m_inputs(inputs)
-    {
-        m_outputs.reserve(inputs.size());
-        for (const auto &input : inputs)
-        {
-            std::string s = input;
-            if (s.ends_with(".java"))
-            {
-                s.resize(s.size() - 5);
-            }
-
-            s.append(".class");
-            m_outputs.push_back(s);
-        }
-    }
-
-    u8 compile() const;
+    Compiler(const char *input, const char *output);
+    bool compile();
 
   private:
-    bool compile_input(u32 i) const;
+    bool contains_token(std::string_view token) const;
+    void push_diagnostic(std::string_view msg) const;
+
+    const char *m_input;
+    const char *m_output;
+
+    // State that tracks the special end-of-file condition outlined in JLS 3.5
+    int m_src_file_ch;
+    bool m_prev_raw_sub;
+
+    // Reconstructed Unicode code point from UTF-8 input.
+    u32 m_raw_unicode;
+    // State counter for Unicode code point reconstruction.
+    u32 m_raw_unicode_remaining;
+
+    // Source code line segmentation state.
+    u64 m_line_num;
+    u64 m_col_num;
+    bool prev_raw_cr;
+
+    // State variables responsible for keeping track of
+    // Unicode escape sequences (i.e. \uXXXX).
+    u16 m_esc_utf16[2];
+    u32 m_esc_utf16_len;
+    u32 m_esc_utf16_remaining;
+    bool m_prev_from_esc;
+
+    // Backslashes need special care during parsing because
+    // they're used in escape sequences at various stages.
+    bool m_prev_backslash;
+    u64 m_raw_backslash_count;
+
+    char m_ascii_tok_buf[sizeof("synchronized")];
+    u32 m_ascii_tok_buf_len;
+
+    LexerItem m_lexer_item;
+    bool m_prev_trad_comment_end_star;
+};
+
+class CompilerManager
+{
+  public:
+    explicit CompilerManager(std::span<const char *> inputs);
+    u8 run() const;
+
+  private:
+    bool compile_unit(u32 i) const;
 
     const std::span<const char *> m_inputs;
     std::vector<std::string> m_outputs;
