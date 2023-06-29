@@ -55,8 +55,10 @@ class Compiler
     bool compile();
 
   private:
-    bool contains_token(std::string_view token) const;
-    void push_diagnostic(std::string_view msg) const;
+    void push_diagnostic(std::string_view msg);
+
+    void ascii_token_append(char c);
+    bool ascii_token_contains(std::string_view token) const;
 
     const char *m_input;
     const char *m_output;
@@ -89,6 +91,9 @@ class Compiler
 
     char m_ascii_tok_buf[sizeof("synchronized")];
     u32 m_ascii_tok_buf_len;
+    // Position of the current token's first character.
+    u64 m_ascii_tok_buf_line_num;
+    u64 m_ascii_tok_buf_col_num;
 
     LexerItem m_lexer_item;
     bool m_prev_trad_comment_end_star;

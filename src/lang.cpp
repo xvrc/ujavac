@@ -2,6 +2,7 @@
 
 #include <atomic>
 #include <cstdio>
+#include <format>
 
 #include <tbb/parallel_for.h>
 
@@ -59,24 +60,36 @@ Compiler::Compiler(const char *input, const char *output) : m_input(input), m_ou
 {
 }
 
-bool Compiler::contains_token(std::string_view token) const
+bool Compiler::ascii_token_contains(std::string_view token) const
 {
     return std::string_view(m_ascii_tok_buf, m_ascii_tok_buf_len) == token;
 }
 
-void Compiler::push_diagnostic(std::string_view msg) const
+void Compiler::push_diagnostic(std::string_view msg)
 {
     println(stderr, "{}:{}:{}: {}", m_input, m_line_num, m_col_num, msg);
+}
+
+void Compiler::ascii_token_append(char c)
+{
+    if (!m_ascii_tok_buf_len)
+    {
+        m_ascii_tok_buf_line_num = m_line_num;
+        m_ascii_tok_buf_col_num = m_col_num;
+    }
+
+    m_ascii_tok_buf[m_ascii_tok_buf_len++] = c;
 }
 
 bool Compiler::compile()
 {
     std::FILE *src_file = std::fopen(m_input, "rb");
     std::FILE *dst_file = std::fopen(m_output, "wb");
+    bool compilation_successful = false;
 
     if (!src_file || !dst_file)
     {
-        goto cleanup;
+        goto finish;
     }
 
     m_src_file_ch = 0;
@@ -94,6 +107,8 @@ bool Compiler::compile()
     m_ascii_tok_buf_len = 0;
     m_lexer_item = LexerItem::None;
     m_prev_trad_comment_end_star = false;
+    m_ascii_tok_buf_line_num = 0;
+    m_ascii_tok_buf_col_num = 0;
 
     while (m_src_file_ch != EOF)
     {
@@ -108,8 +123,8 @@ bool Compiler::compile()
         {
             if (raw_utf8 == 0x80)
             {
-                push_diagnostic("invalid UTF-8 byte");
-                goto cleanup;
+                push_diagnostic(std::format("invalid UTF-8 byte: {:#x}", raw_utf8));
+                goto finish;
             }
 
             for (m_raw_unicode_remaining = 1; raw_utf8 & (0x80 >> m_raw_unicode_remaining); ++m_raw_unicode_remaining)
@@ -195,8 +210,8 @@ bool Compiler::compile()
                 val = m_raw_unicode - '0';
                 break;
             default:;
-                // TODO fatal
-                goto cleanup;
+                push_diagnostic(std::format("unexpected character in Unicode escape: {}", m_raw_unicode));
+                goto finish;
             }
 
             m_esc_utf16[m_esc_utf16_len] |= val << (4 * m_esc_utf16_remaining);
@@ -206,21 +221,35 @@ bool Compiler::compile()
                 m_prev_from_esc = true;
                 m_esc_utf16_len++;
 
-                if (m_esc_utf16_len == 1 && is_utf16_low_surrogate(m_esc_utf16[0]))
+                if (m_esc_utf16_len == 1)
                 {
-                    // TODO fatal
-                    goto cleanup;
+                    if (is_utf16_high_surrogate(m_esc_utf16[0]))
+                    {
+                        // We expect a low surrogate to follow; parse it now
+                        continue;
+                    }
+
+                    if (is_utf16_low_surrogate(m_esc_utf16[0]))
+                    {
+                        push_diagnostic("expected BMP Unicode escape");
+                        goto finish;
+                    }
+
+                    unicode = m_esc_utf16[0];
+                }
+                else if (m_esc_utf16_len == 2)
+                {
+                    if (!is_utf16_high_surrogate(m_esc_utf16[0]) || !is_utf16_low_surrogate(m_esc_utf16[1]))
+                    {
+                        push_diagnostic("invalid Unicode escape sequence");
+                        goto finish;
+                    }
+
+                    unicode = 0x10000 + (u32(m_esc_utf16[0] & 0x3FF) << 10) | (m_esc_utf16[1] & 0x3FF);
                 }
 
-                // TODO convert esc_utf16 to unicode
+                m_esc_utf16_len = 0;
             }
-
-            if (m_esc_utf16_len != 2)
-            {
-                continue;
-            }
-
-            m_esc_utf16_len = 0;
         }
         // JLS 3.3
         else if (m_prev_backslash && m_raw_unicode == 'u' && (m_raw_backslash_count % 2 == 0 || m_prev_from_esc))
@@ -236,13 +265,15 @@ bool Compiler::compile()
             continue;
         }
 
-        m_prev_from_esc = false;
-
-        if (m_esc_utf16_len && is_utf16_high_surrogate(m_esc_utf16[0]))
+        if (m_esc_utf16_len)
         {
-            // TODO fatal
-            goto cleanup;
+            // If we get here, then the UTF-16 decoder was
+            // waiting on a low surrogate which never came
+            push_diagnostic("unexpected end of Unicode escape sequence");
+            goto finish;
         }
+
+        m_prev_from_esc = false;
 
         if (m_lexer_item == LexerItem::TraditionalComment)
         {
@@ -264,34 +295,50 @@ bool Compiler::compile()
             continue;
         }
 
-        if (is_ascii(unicode))
+        if (is_whitespace(unicode))
         {
-            m_ascii_tok_buf[m_ascii_tok_buf_len++] = unicode;
+            if (ascii_token_contains("const"))
+            {
+                push_diagnostic("unexpected const");
+                goto finish;
+            }
+            else if (ascii_token_contains("goto"))
+            {
+                push_diagnostic("unexpected goto");
+                goto finish;
+            }
 
-            if (contains_token("//"))
+            m_ascii_tok_buf_len = 0;
+        }
+        else if (is_ascii(unicode))
+        {
+            ascii_token_append(unicode);
+
+            if (ascii_token_contains("//"))
             {
                 m_lexer_item = LexerItem::EndOfLineComment;
                 m_ascii_tok_buf_len = 0;
             }
-            else if (contains_token("/*"))
+            else if (ascii_token_contains("/*"))
             {
                 m_lexer_item = LexerItem::TraditionalComment;
                 m_ascii_tok_buf_len = 0;
             }
-            // FIXME too preemptive, doesn't account for e.g. "constz", which is valid
-            else if (contains_token("const") || contains_token("goto"))
-            {
-                // TODO fatal
-                goto cleanup;
-            }
         }
     }
 
-cleanup:
-    bool good = false;
+    if (std::ferror(src_file))
+    {
+        push_diagnostic("error reading input file");
+    }
+    else
+    {
+        compilation_successful = true;
+    }
+
+finish:
     if (src_file)
     {
-        good = !std::ferror(src_file);
         std::fclose(src_file);
     }
 
@@ -300,7 +347,7 @@ cleanup:
         std::fclose(dst_file);
     }
 
-    return good;
+    return compilation_successful;
 }
 
 CompilerManager::CompilerManager(std::span<const char *> inputs) : m_inputs(inputs)
