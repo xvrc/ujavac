@@ -85,6 +85,7 @@ bool Compiler::compile()
 {
     std::FILE *src_file = std::fopen(m_input, "rb");
     std::FILE *dst_file = std::fopen(m_output, "wb");
+    int src_file_ch = 0;
     bool compilation_successful = false;
 
     if (!src_file || !dst_file)
@@ -92,8 +93,6 @@ bool Compiler::compile()
         goto finish;
     }
 
-    m_src_file_ch = 0;
-    m_prev_raw_sub = false;
     m_raw_unicode = 0;
     m_raw_unicode_remaining = 0;
     m_line_num = 1;
@@ -110,14 +109,20 @@ bool Compiler::compile()
     m_ascii_tok_buf_line_num = 0;
     m_ascii_tok_buf_col_num = 0;
 
-    while (m_src_file_ch != EOF)
+    while (src_file_ch != EOF)
     {
-        m_src_file_ch = std::fgetc(src_file);
+        src_file_ch = std::fgetc(src_file);
+
+        if (src_file_ch == EOF && std::ferror(src_file))
+        {
+            push_diagnostic("error reading input file");
+            goto finish;
+        }
 
         // A single UTF-8 encoding character from the input
         // stream. All input starts from this representation.
-        // TODO handle EOF condition correctly
-        u8 raw_utf8 = m_src_file_ch == EOF ? 0 : m_src_file_ch;
+        // TODO handle EOF condition correctly (JLS 3.5)
+        u8 raw_utf8 = src_file_ch == EOF ? 0 : src_file_ch;
 
         if (!m_raw_unicode_remaining)
         {
@@ -141,21 +146,11 @@ bool Compiler::compile()
             continue;
         }
 
-        if (m_raw_unicode == '\x1A')
-        {
-            m_prev_raw_sub = true;
-        }
-
         // JLS 3.4
         if (m_raw_unicode == '\r' || m_raw_unicode == '\n' && !prev_raw_cr)
         {
             m_line_num++;
             m_col_num = 1;
-
-            if (m_lexer_item == LexerItem::EndOfLineComment)
-            {
-                m_lexer_item = LexerItem::None;
-            }
 
             prev_raw_cr = m_raw_unicode == '\r';
         }
@@ -275,6 +270,12 @@ bool Compiler::compile()
 
         m_prev_from_esc = false;
 
+        if (m_lexer_item == LexerItem::EndOfLineComment && (unicode == '\r' || unicode == '\n'))
+        {
+            m_lexer_item = LexerItem::None;
+            continue;
+        }
+
         if (m_lexer_item == LexerItem::TraditionalComment)
         {
             if (m_prev_trad_comment_end_star && unicode == '/')
@@ -295,7 +296,29 @@ bool Compiler::compile()
             continue;
         }
 
-        if (is_whitespace(unicode))
+        if (ascii_token_contains("/") && (unicode == '/' || unicode == '*'))
+        {
+            m_lexer_item = unicode == '/' ? LexerItem::EndOfLineComment : LexerItem::TraditionalComment;
+            m_ascii_tok_buf_len = 0;
+            continue;
+        }
+
+        if (m_ascii_tok_buf_len == 0 && is_identifier_start(unicode) || is_identifier_part(unicode))
+        {
+            if (is_ascii(unicode))
+            {
+                ascii_token_append(unicode);
+            }
+            else
+            {
+                // TODO implement
+            }
+        }
+        else if (m_ascii_tok_buf_len == 0 && unicode == '/')
+        {
+            ascii_token_append(unicode);
+        }
+        else
         {
             if (ascii_token_contains("const"))
             {
@@ -307,34 +330,10 @@ bool Compiler::compile()
                 push_diagnostic("unexpected goto");
                 goto finish;
             }
-
-            m_ascii_tok_buf_len = 0;
-        }
-        else if (is_ascii(unicode))
-        {
-            ascii_token_append(unicode);
-
-            if (ascii_token_contains("//"))
-            {
-                m_lexer_item = LexerItem::EndOfLineComment;
-                m_ascii_tok_buf_len = 0;
-            }
-            else if (ascii_token_contains("/*"))
-            {
-                m_lexer_item = LexerItem::TraditionalComment;
-                m_ascii_tok_buf_len = 0;
-            }
         }
     }
 
-    if (std::ferror(src_file))
-    {
-        push_diagnostic("error reading input file");
-    }
-    else
-    {
-        compilation_successful = true;
-    }
+    compilation_successful = true;
 
 finish:
     if (src_file)

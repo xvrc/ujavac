@@ -63,10 +63,6 @@ class Compiler
     const char *m_input;
     const char *m_output;
 
-    // State that tracks the special end-of-file condition outlined in JLS 3.5
-    int m_src_file_ch;
-    bool m_prev_raw_sub;
-
     // Reconstructed Unicode code point from UTF-8 input.
     u32 m_raw_unicode;
     // State counter for Unicode code point reconstruction.
@@ -91,7 +87,7 @@ class Compiler
 
     char m_ascii_tok_buf[sizeof("synchronized")];
     u32 m_ascii_tok_buf_len;
-    // Position of the current token's first character.
+    // Position of the current token's first character in the input stream.
     u64 m_ascii_tok_buf_line_num;
     u64 m_ascii_tok_buf_col_num;
 
