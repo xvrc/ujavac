@@ -104,7 +104,7 @@ bool Compiler::compile()
     m_prev_backslash = false;
     m_raw_backslash_count = 0;
     m_ascii_tok_buf_len = 0;
-    m_lexer_item = LexerItem::None;
+    m_lexer_item = LexerItem::WhiteSpace;
     m_prev_trad_comment_end_star = false;
     m_ascii_tok_buf_line_num = 0;
     m_ascii_tok_buf_col_num = 0;
@@ -126,6 +126,7 @@ bool Compiler::compile()
 
         if (!m_raw_unicode_remaining)
         {
+            // FIXME error handling must be proper
             if (raw_utf8 == 0x80)
             {
                 push_diagnostic(std::format("invalid UTF-8 byte: {:#x}", raw_utf8));
@@ -204,7 +205,7 @@ bool Compiler::compile()
             case '9':
                 val = m_raw_unicode - '0';
                 break;
-            default:;
+            default:
                 push_diagnostic(std::format("unexpected character in Unicode escape: {}", m_raw_unicode));
                 goto finish;
             }
@@ -272,7 +273,7 @@ bool Compiler::compile()
 
         if (m_lexer_item == LexerItem::EndOfLineComment && (unicode == '\r' || unicode == '\n'))
         {
-            m_lexer_item = LexerItem::None;
+            m_lexer_item = LexerItem::WhiteSpace;
             continue;
         }
 
@@ -280,7 +281,7 @@ bool Compiler::compile()
         {
             if (m_prev_trad_comment_end_star && unicode == '/')
             {
-                m_lexer_item = LexerItem::None;
+                m_lexer_item = LexerItem::WhiteSpace;
                 m_prev_trad_comment_end_star = false;
             }
             else if (unicode == '*')
@@ -303,7 +304,23 @@ bool Compiler::compile()
             continue;
         }
 
-        if (m_ascii_tok_buf_len == 0 && is_identifier_start(unicode) || is_identifier_part(unicode))
+        if (m_lexer_item == LexerItem::WhiteSpace && is_identifier_start(unicode))
+        {
+            m_lexer_item = LexerItem::IdentifierChars;
+
+            if (is_ascii(unicode))
+            {
+                ascii_token_append(unicode);
+            }
+            else
+            {
+                // Only identifiers can contain non-ASCII characters
+                m_lexer_item = LexerItem::Identifier;
+
+                // TODO implement
+            }
+        }
+        else if (m_lexer_item == LexerItem::IdentifierChars && is_identifier_part(unicode))
         {
             if (is_ascii(unicode))
             {
@@ -311,6 +328,9 @@ bool Compiler::compile()
             }
             else
             {
+                // Only identifiers can contain non-ASCII characters
+                m_lexer_item = LexerItem::Identifier;
+
                 // TODO implement
             }
         }
@@ -318,8 +338,9 @@ bool Compiler::compile()
         {
             ascii_token_append(unicode);
         }
-        else
+        else if(m_lexer_item == LexerItem::IdentifierChars && is_whitespace(unicode))
         {
+            // Perform token disambugation
             if (ascii_token_contains("const"))
             {
                 push_diagnostic("unexpected const");

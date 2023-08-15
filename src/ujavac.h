@@ -43,9 +43,13 @@ template <class... Args> u32 println(std::format_string<Args...> fmt, Args &&...
 
 enum class LexerItem
 {
-    None,
+    WhiteSpace,
     TraditionalComment,
     EndOfLineComment,
+    // Indeterminate form that can morph into one
+    // of: indentifier, reserved keyword, or literal
+    IdentifierChars,
+    Identifier,
 };
 
 class Compiler
